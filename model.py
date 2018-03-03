@@ -1119,8 +1119,7 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     loss = K.switch(tf.size(target_bbox) > 0,
                     smooth_l1_loss(y_true=target_bbox, y_pred=pred_bbox),
                     tf.constant(0.0))
-    loss = K.mean(loss)
-    loss = K.reshape(loss, [1, 1])
+    loss = tf.reduce_mean(loss, axis=None)
     return loss
 
 
@@ -1159,8 +1158,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
     loss = K.switch(tf.size(y_true) > 0,
                     K.binary_crossentropy(target=y_true, output=y_pred),
                     tf.constant(0.0))
-    loss = K.mean(loss)
-    loss = K.reshape(loss, [1, 1])
+    loss = tf.reduce_mean(loss, axis=None)
     return loss
 
 
@@ -1202,15 +1200,17 @@ def load_image_gt(dataset, config, image_id, augment=False,
 
     # Random data augmentation
     if augment:
+        ## position & shape data augmentation
         detaug = imgaug_sequence[0].to_deterministic()
         image = detaug.augment_image(image)
         mask  = detaug.augment_image( mask)
+        ## color data augmentation
         image = imgaug_sequence[1].augment_image(image)
 
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
     # bbox: [num_instances, (y1, x1, y2, x2)]
-    bbox = utils.extract_bboxes(mask)
+    bbox = utils.extract_bboxes((mask>.5).astype(np.uint8)) # mask(float) -> mask(bool) to determine bbox (sharper bbox border)
 
     # Active classes
     # Different datasets have different classes, so track the
@@ -1628,8 +1628,22 @@ class data_generator(Sequence):
         sometimes = lambda aug: iaa.Sometimes(0.5, aug)
         self.imgaug_sequence = [iaa.Sequential(
             [
-                iaa.Fliplr(0.5),
-                iaa.Flipud(0.5),
+                iaa.Fliplr(0.5), # flip horizontal
+                iaa.Flipud(0.5), # flip vertical
+                sometimes(iaa.CropAndPad( # Random crop/pad
+                    percent=(-0.05, 0.1),
+                    pad_mode='constant',
+                    pad_cval=0
+                )),
+                sometimes(iaa.Affine( # Random affine transform
+                    scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                    rotate=(-30, 30),
+                    shear=(-10, 10),
+                    order=[0, 1],
+                    cval=0,
+                    mode='constant'
+                )),
                 sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
             ],
             random_order=True
@@ -2211,7 +2225,7 @@ class MaskRCNN():
 
         # Data generators
         train_generator = data_generator(train_dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE, augment=True)
-        val_generator = data_generator(val_dataset, self.config, shuffle=False, batch_size=self.config.BATCH_SIZE, augment=False)
+        val_generator = data_generator(val_dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE, augment=False)
 
         # Callbacks
         callbacks = [
