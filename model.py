@@ -28,6 +28,8 @@ import keras.initializers as KI
 from keras.utils import Sequence
 import keras.engine as KE
 import keras.models as KM
+import imgaug as ia
+from imgaug import augmenters as iaa
 
 import utils
 
@@ -1167,7 +1169,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 ############################################################
 
 def load_image_gt(dataset, config, image_id, augment=False,
-                  use_mini_mask=False):
+                  use_mini_mask=False, imgaug_sequence=None):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 
     augment: If true, apply random image augmentation. Currently, only
@@ -1198,11 +1200,12 @@ def load_image_gt(dataset, config, image_id, augment=False,
         padding=config.IMAGE_PADDING)
     mask = utils.resize_mask(mask, scale, padding)
 
-    # Random horizontal flips.
+    # Random data augmentation
     if augment:
-        if random.randint(0, 1):
-            image = np.fliplr(image)
-            mask = np.fliplr(mask)
+        detaug = imgaug_sequence[0].to_deterministic()
+        image = detaug.augment_image(image)
+        mask  = detaug.augment_image( mask)
+        image = imgaug_sequence[1].augment_image(image)
 
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
@@ -1604,8 +1607,7 @@ class data_generator(Sequence):
         is True then the outputs list contains target class_ids, bbox deltas,
         and masks.
     """
-    def __init__(self, dataset, config, shuffle=True, augment=True, random_rois=0, \
-                   batch_size=1, detection_targets=False):
+    def __init__(self, dataset, config, shuffle=True, augment=True, random_rois=0, batch_size=1, detection_targets=False):
         self.dataset = dataset
         self.config = config
         self.shuffle = shuffle
@@ -1623,6 +1625,30 @@ class data_generator(Sequence):
                                              config.RPN_ANCHOR_STRIDE)
 
         self.image_ids = np.copy(dataset.image_ids)
+        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+        self.imgaug_sequence = [iaa.Sequential(
+            [
+                iaa.Fliplr(0.5),
+                iaa.Flipud(0.5),
+                sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
+            ],
+            random_order=True
+        ),
+            iaa.Sequential(
+            [
+                iaa.OneOf([
+                    iaa.GaussianBlur((0, 3.0)), # blur images with a sigma between 0 and 3.0
+                    iaa.AverageBlur(k=(2, 7)), # blur image using local means with kernel sizes between 2 and 7
+                    iaa.MedianBlur(k=(3, 11)), # blur image using local medians with kernel sizes between 2 and 7
+                ]),
+                iaa.Add((-10, 10), per_channel=0.5),
+                sometimes(iaa.AddToHueAndSaturation((-20, 20))),
+                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+                iaa.Multiply((0.5, 1.5), per_channel=0.5),
+            ],
+            random_order=True
+            )
+        ]
 
         if self.shuffle:
             np.random.shuffle(self.image_ids)
@@ -1642,15 +1668,13 @@ class data_generator(Sequence):
         for b, image_index in enumerate(range(l_bound, r_bound)):
             image_id = self.image_ids[image_index]
             image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                load_image_gt(self.dataset, self.config, image_id, augment=self.augment,
-                              use_mini_mask=self.config.USE_MINI_MASK)
+                load_image_gt(self.dataset, self.config, image_id, augment=self.augment, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=self.imgaug_sequence)
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
             # have any of the classes we care about.
-            #if not np.any(gt_class_ids > 0):
-                #continue # (b+=1)
-            # OOPS!!
+            if not np.any(gt_class_ids > 0):
+                continue # Warning: the value of b-th image are all zero
 
             # RPN Targets
             rpn_match, rpn_bbox = build_rpn_targets(image.shape, self.anchors,
