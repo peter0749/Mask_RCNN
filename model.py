@@ -1629,32 +1629,32 @@ class data_generator(Sequence):
         self.imgaug_sequence = [iaa.Sequential(
             [
                 iaa.Fliplr(0.5), # flip horizontal
-                iaa.Flipud(0.5), # flip vertical
+                #iaa.Flipud(0.5), # flip vertical
                 sometimes(iaa.CropAndPad( # Random crop/pad
                     percent=(-0.05, 0.1),
                     pad_mode='constant',
                     pad_cval=0
                 )),
                 sometimes(iaa.Affine( # Random affine transform
-                    scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+                    #scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
                     translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
-                    rotate=(-15, 15),
-                    shear=(-5, 5),
+                    #rotate=(-15, 15),
+                    #shear=(-5, 5),
                     order=[0,1],
                     cval=0,
                     mode='constant'
                 )),
-                sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
+                #sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
             ],
             random_order=True
         ),
             iaa.Sequential(
             [
-                iaa.OneOf([
+                sometimes(iaa.OneOf([
                     iaa.GaussianBlur((0, 3.0)), # blur images with a sigma between 0 and 3.0
                     iaa.AverageBlur(k=(2, 7)), # blur image using local means with kernel sizes between 2 and 7
                     iaa.MedianBlur(k=(3, 11)), # blur image using local medians with kernel sizes between 2 and 7
-                ]),
+                ])),
                 iaa.Add((-10, 10), per_channel=0.5),
                 sometimes(iaa.AddToHueAndSaturation((-20, 20))),
                 iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
