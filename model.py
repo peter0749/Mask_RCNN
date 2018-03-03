@@ -1202,15 +1202,15 @@ def load_image_gt(dataset, config, image_id, augment=False,
     if augment:
         ## position & shape data augmentation
         detaug = imgaug_sequence[0].to_deterministic()
-        image = detaug.augment_image(image)
-        mask  = detaug.augment_image( mask)
+        image =  detaug.augment_image(image)
+        mask  = (detaug.augment_image( mask)>0.5).astype(np.float32)
         ## color data augmentation
         image = imgaug_sequence[1].augment_image(image)
 
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
     # bbox: [num_instances, (y1, x1, y2, x2)]
-    bbox = utils.extract_bboxes((mask>.5).astype(np.uint8)) # mask(float) -> mask(bool) to determine bbox (sharper bbox border)
+    bbox = utils.extract_bboxes(mask)
 
     # Active classes
     # Different datasets have different classes, so track the
@@ -1636,11 +1636,11 @@ class data_generator(Sequence):
                     pad_cval=0
                 )),
                 sometimes(iaa.Affine( # Random affine transform
-                    scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
-                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                    rotate=(-30, 30),
-                    shear=(-10, 10),
-                    order=[0, 1],
+                    scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+                    translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
+                    rotate=(-15, 15),
+                    shear=(-5, 5),
+                    order=[0,1],
                     cval=0,
                     mode='constant'
                 )),
@@ -1679,15 +1679,19 @@ class data_generator(Sequence):
         if r_bound > len(self.image_ids):
             r_bound = len(self.image_ids)
             l_bound = r_bound - self.batch_size # adjust to a full batch size
+        first = True
         for b, image_index in enumerate(range(l_bound, r_bound)):
             image_id = self.image_ids[image_index]
-            image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                load_image_gt(self.dataset, self.config, image_id, augment=self.augment, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=self.imgaug_sequence)
+            try: # try to do data augmentation
+                image, image_meta, gt_class_ids, gt_boxes, gt_masks = load_image_gt(self.dataset, self.config, image_id, augment=self.augment, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=self.imgaug_sequence)
+            except:
+                image, image_meta, gt_class_ids, gt_boxes, gt_masks = load_image_gt(self.dataset, self.config, image_id, augment=False, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=None)
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
             # have any of the classes we care about.
             if not np.any(gt_class_ids > 0):
+                gt_class_ids[0] = 1. # treat it as BG
                 continue # Warning: the value of b-th image are all zero
 
             # RPN Targets
@@ -1701,7 +1705,8 @@ class data_generator(Sequence):
                     rois, mrcnn_class_ids, mrcnn_bbox, mrcnn_mask =\
                         build_detection_targets(
                             rpn_rois, gt_class_ids, gt_boxes, gt_masks, self.config)
-            if b==0:
+            if first: # initialize batchs
+                first = False
                 batch_image_meta = np.zeros(
                     (self.batch_size,) + image_meta.shape, dtype=image_meta.dtype)
                 batch_rpn_match = np.zeros(
