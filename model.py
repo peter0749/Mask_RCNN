@@ -1201,11 +1201,25 @@ def load_image_gt(dataset, config, image_id, augment=False,
     # Random data augmentation
     if augment:
         ## position & shape data augmentation
+        img_dtype = image.dtype
+        msk_dtype = mask.dtype
         detaug = imgaug_sequence[0].to_deterministic()
         image =  detaug.augment_image(image)
-        mask  = (detaug.augment_image( mask)>0.5).astype(np.float32)
+        mask  =  detaug.augment_image( mask)>0.5
         ## color data augmentation
         image = imgaug_sequence[1].augment_image(image)
+        image = image.astype(img_dtype)
+        mask  =  mask.astype(msk_dtype)
+
+    _idx = np.sum((mask>0), axis=(0,1)) > 0 # filter out mask wo instance
+    # sys.stderr.write('hasinst: '+str(np.sum(_idx) / len(_idx))+'\n')
+    if np.sum(_idx) == 0: # no instance
+        mask = np.zeros((mask.shape[0], mask.shape[1], 1), dtype=mask.dtype)
+        mask[0,0,0] = 1
+        class_ids = np.array([1])
+    else:
+        mask = mask[...,_idx]
+        class_ids = class_ids[_idx]
 
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
@@ -1629,22 +1643,22 @@ class data_generator(Sequence):
         self.imgaug_sequence = [iaa.Sequential(
             [
                 iaa.Fliplr(0.5), # flip horizontal
-                #iaa.Flipud(0.5), # flip vertical
+                iaa.Flipud(0.5), # flip vertical
                 sometimes(iaa.CropAndPad( # Random crop/pad
                     percent=(-0.05, 0.1),
                     pad_mode='constant',
                     pad_cval=0
                 )),
                 sometimes(iaa.Affine( # Random affine transform
-                    #scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+                    scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
                     translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
-                    #rotate=(-15, 15),
-                    #shear=(-5, 5),
+                    rotate=(-15, 15),
+                    shear=(-5, 5),
                     order=[0,1],
                     cval=0,
                     mode='constant'
                 )),
-                #sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
+                sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
             ],
             random_order=True
         ),
@@ -1686,13 +1700,6 @@ class data_generator(Sequence):
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = load_image_gt(self.dataset, self.config, image_id, augment=self.augment, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=self.imgaug_sequence)
             except:
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = load_image_gt(self.dataset, self.config, image_id, augment=False, use_mini_mask=self.config.USE_MINI_MASK, imgaug_sequence=None)
-
-            # Skip images that have no instances. This can happen in cases
-            # where we train on a subset of classes and the image doesn't
-            # have any of the classes we care about.
-            if not np.any(gt_class_ids > 0):
-                gt_class_ids[0] = 1. # treat it as BG
-                continue # Warning: the value of b-th image are all zero
 
             # RPN Targets
             rpn_match, rpn_bbox = build_rpn_targets(image.shape, self.anchors,
