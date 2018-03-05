@@ -1658,7 +1658,8 @@ class data_generator(Sequence):
                     cval=0,
                     mode='constant'
                 )),
-                sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01)))
+                # sometimes(iaa.PiecewiseAffine(scale=(0.005, 0.01))), # elastic distortion (!!!constly operations!!!)
+                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.075))) # simmulate changes on z-axis ?!
             ],
             random_order=True
         ),
@@ -1670,9 +1671,13 @@ class data_generator(Sequence):
                     iaa.MedianBlur(k=(3, 11)), # blur image using local medians with kernel sizes between 2 and 7
                 ])),
                 iaa.Add((-10, 10), per_channel=0.5),
-                sometimes(iaa.AddToHueAndSaturation((-20, 20))),
-                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+                sometimes(iaa.AddToHueAndSaturation((-10, 10))),
+                sometimes(iaa.OneOf([
+                    iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+                    iaa.SaltAndPepper(p=0.02)
+                ])),
                 iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                sometimes(iaa.ContrastNormalization((0.5, 1.2), per_channel=0.5)) # improve or worsen the contrast
             ],
             random_order=True
             )
@@ -2202,7 +2207,7 @@ class MaskRCNN():
         self.checkpoint_path = self.checkpoint_path.replace(
             "*epoch*", "{epoch:04d}")
 
-    def train(self, train_dataset, val_dataset, learning_rate, epochs, layers):
+    def train(self, train_dataset, val_dataset, learning_rate, epochs, layers, callbacks=[]):
         """Train the model.
         train_dataset, val_dataset: Training and validation Dataset objects.
         learning_rate: The learning rate to train with
@@ -2240,12 +2245,12 @@ class MaskRCNN():
         val_generator = data_generator(val_dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE, augment=False)
 
         # Callbacks
-        callbacks = [
+        callbacks.extend([
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
             keras.callbacks.ModelCheckpoint(self.checkpoint_path,
                                             verbose=0, save_weights_only=True),
-        ]
+        ])
 
         # Train
         log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
